@@ -82,6 +82,32 @@ static float rms_after_processing(Vocoder *v, float voice_amp, float carrier_amp
     return sqrtf((float)(sum / (double)(blocks * VOCODER_BLOCK)));
 }
 
+
+static int reset_is_deterministic(void)
+{
+    Vocoder v;
+    float voice[VOCODER_BLOCK];
+    float carrier[VOCODER_BLOCK];
+    float out_a[VOCODER_BLOCK];
+    float out_b[VOCODER_BLOCK];
+
+    vocoder_init(&v, (float)VOCODER_FS);
+    for (unsigned i = 0; i < VOCODER_BLOCK; ++i) {
+        const float t = (float)i / (float)VOCODER_FS;
+        voice[i] = 0.7f * sine(6500.0f * t) + 0.2f * sine(220.0f * t);
+        carrier[i] = 0.7f * saw(110.0f * t) + 0.3f * saw(220.0f * t);
+    }
+
+    vocoder_process_block(&v, voice, carrier, out_a, VOCODER_BLOCK);
+    vocoder_reset(&v);
+    vocoder_process_block(&v, voice, carrier, out_b, VOCODER_BLOCK);
+
+    for (unsigned i = 0; i < VOCODER_BLOCK; ++i) {
+        if (fabsf(out_a[i] - out_b[i]) > 1.0e-7f) return 1;
+    }
+    return 0;
+}
+
 int main(void)
 {
     Vocoder v;
@@ -89,6 +115,7 @@ int main(void)
     if (run_signal_test(VOCODER_BLOCK) != 0) return 1;
     if (run_signal_test(37u) != 0) return 1;
     if (run_signal_test(100u) != 0) return 1;
+    if (reset_is_deterministic() != 0) return 1;
 
     vocoder_init(&v, (float)VOCODER_FS);
     if (rms_after_processing(&v, 0.0f, 0.8f) > 0.015f) return 1;

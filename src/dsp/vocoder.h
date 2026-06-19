@@ -10,8 +10,6 @@ extern "C" {
 #define VOCODER_FS          48000
 #define VOCODER_BLOCK       64
 #define VOCODER_NBANDS      20
-#define VOCODER_USE_FLOAT   1
-#define VOCODER_USE_SIBIL   1
 
 typedef struct {
     float b0, b1, b2;
@@ -42,7 +40,6 @@ typedef struct {
 
     float sibilance;
     float sibilance_amount;
-    float sibilance_smooth;
     float sibilance_coef;
 
     float output_gain;

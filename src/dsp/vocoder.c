@@ -8,6 +8,10 @@
 #define M_PI 3.14159265358979323846
 #endif
 
+#if VOCODER_NBANDS != 20
+#error "VOCODER_NBANDS must be exactly 20 to match the static k_band_edges array."
+#endif
+
 static const float k_band_edges[VOCODER_NBANDS + 1] = {
     90.0f, 113.0f, 143.0f, 180.0f, 226.0f, 285.0f, 358.0f,
     451.0f, 568.0f, 715.0f, 900.0f, 1133.0f, 1426.0f, 1796.0f,
@@ -42,7 +46,9 @@ static inline float xorshift_noise(uint32_t *state)
     x ^= x >> 17;
     x ^= x << 5;
     *state = x;
-    return ((float)((int32_t)x) * (1.0f / 2147483648.0f));
+    int32_t signed_x;
+    memcpy(&signed_x, &x, sizeof(signed_x));
+    return (float)signed_x * (1.0f / 2147483648.0f);
 }
 
 static inline float softclip(float x)
@@ -77,7 +83,6 @@ static void biquad_normalize(Biquad *s, float b0, float b1, float b2,
     s->b2 = b2 * inv_a0;
     s->a1 = a1 * inv_a0;
     s->a2 = a2 * inv_a0;
-    biquad_reset(s);
 }
 
 void biquad_set_bandpass(Biquad *s, float fs, float fc, float q)
@@ -188,6 +193,7 @@ void vocoder_reset(Vocoder *v)
     }
     v->preemph_z = 0.0f;
     v->sibilance = 0.0f;
+    v->rng = 0x12345678u;
 }
 
 void vocoder_set_wet_dry(Vocoder *v, float wet, float dry)
@@ -235,14 +241,13 @@ void vocoder_process_block(Vocoder *v, const float *voice_in,
             const float e = env_follow(v->env[k], fabsf(vk), v->atk_coef[k], v->rel_coef[k]);
             v->env[k] = e;
             env_sum += e;
-            if (k >= VOCODER_NBANDS - 5u) env_hi += e;
+            if (k >= (VOCODER_NBANDS >= 5u ? VOCODER_NBANDS - 5u : 0u)) env_hi += e;
         }
 
         float sib_target = ((env_hi / (env_sum + 1.0e-6f)) - 0.25f) * 3.0f;
         sib_target = clampf(sib_target, 0.0f, 1.0f) * v->sibilance_amount;
         v->sibilance = v->sibilance_coef * v->sibilance +
                        (1.0f - v->sibilance_coef) * sib_target;
-        v->sibilance_smooth = v->sibilance;
 
         float noise = xorshift_noise(&v->rng);
         noise = biquad_process(&v->noise_hpf, noise);
@@ -250,7 +255,7 @@ void vocoder_process_block(Vocoder *v, const float *voice_in,
 
         for (unsigned k = 0; k < VOCODER_NBANDS; ++k) {
             float ck = biquad_process(&v->car[k], carrier);
-            if (k >= VOCODER_NBANDS - 5u) {
+            if (k >= (VOCODER_NBANDS >= 5u ? VOCODER_NBANDS - 5u : 0u)) {
                 const float mix = v->sibilance * 0.6f;
                 ck = ck * (1.0f - mix) + noise * mix;
             }
