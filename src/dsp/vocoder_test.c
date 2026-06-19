@@ -108,6 +108,54 @@ static int reset_is_deterministic(void)
     return 0;
 }
 
+
+static int coeffs_are_finite(const Vocoder *v)
+{
+    if (!isfinite(v->wet) || v->wet < 0.0f || v->wet > 1.0f) return 0;
+    if (!isfinite(v->dry) || v->dry < 0.0f || v->dry > 1.0f) return 0;
+    if (!isfinite(v->output_gain) || v->output_gain < 0.0f || v->output_gain > 4.0f) return 0;
+    if (!isfinite(v->sibilance_amount) || v->sibilance_amount < 0.0f ||
+        v->sibilance_amount > 1.0f) return 0;
+    if (!isfinite(v->preemph) || v->preemph < 0.0f || v->preemph > 0.95f) return 0;
+    if (!isfinite(v->fs) || v->fs < 1000.0f || v->fs > 384000.0f) return 0;
+    for (unsigned k = 0; k < VOCODER_NBANDS; ++k) {
+        if (!isfinite(v->atk_coef[k]) || !isfinite(v->rel_coef[k])) return 0;
+        if (v->atk_coef[k] < 0.0f || v->atk_coef[k] >= 1.0f) return 0;
+        if (v->rel_coef[k] < 0.0f || v->rel_coef[k] >= 1.0f) return 0;
+    }
+    return 1;
+}
+
+static int invalid_parameter_test(void)
+{
+    Vocoder v;
+    float voice[VOCODER_BLOCK];
+    float carrier[VOCODER_BLOCK];
+    float out[VOCODER_BLOCK];
+
+    vocoder_init(&v, NAN);
+    if (!coeffs_are_finite(&v) || v.fs != (float)VOCODER_FS) return 1;
+
+    vocoder_set_wet_dry(&v, NAN, INFINITY);
+    vocoder_set_output_gain(&v, NAN);
+    vocoder_set_attack_release(&v, NAN, INFINITY, -INFINITY);
+    vocoder_set_sibilance(&v, NAN);
+    vocoder_set_preemphasis(&v, INFINITY);
+    if (!coeffs_are_finite(&v)) return 1;
+
+    for (unsigned b = 0; b < 8u; ++b) {
+        for (unsigned i = 0; i < VOCODER_BLOCK; ++i) {
+            const float t = (float)(b * VOCODER_BLOCK + i) / (float)VOCODER_FS;
+            voice[i] = 0.6f * sine(180.0f * t) + 0.2f * sine(2200.0f * t);
+            carrier[i] = 0.5f * saw(110.0f * t) + 0.25f * saw(330.0f * t);
+        }
+        vocoder_process_block(&v, voice, carrier, out, VOCODER_BLOCK);
+        if (!finite_buffer(out, VOCODER_BLOCK)) return 1;
+    }
+
+    return 0;
+}
+
 int main(void)
 {
     Vocoder v;
@@ -116,6 +164,13 @@ int main(void)
     if (run_signal_test(37u) != 0) return 1;
     if (run_signal_test(100u) != 0) return 1;
     if (reset_is_deterministic() != 0) return 1;
+    if (invalid_parameter_test() != 0) return 1;
+
+    vocoder_init(&v, (float)VOCODER_FS);
+    {
+        const float rms = rms_after_processing(&v, 0.8f, 0.8f);
+        if (rms < 0.001f || rms > 0.8f) return 1;
+    }
 
     vocoder_init(&v, (float)VOCODER_FS);
     if (rms_after_processing(&v, 0.0f, 0.8f) > 0.015f) return 1;

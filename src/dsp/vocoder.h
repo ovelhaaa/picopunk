@@ -10,6 +10,8 @@ extern "C" {
 #define VOCODER_FS          48000
 #define VOCODER_BLOCK       64
 #define VOCODER_NBANDS      20
+#define VOCODER_USE_FLOAT   1
+#define VOCODER_USE_SIBIL   1
 
 typedef struct {
     float b0, b1, b2;
@@ -51,8 +53,19 @@ typedef struct {
 } Vocoder;
 
 void biquad_reset(Biquad *s);
+
+/*
+ * biquad_set_* updates coefficients only; it intentionally does not clear z1/z2.
+ * This is safe during initialization when the state has already been zeroed.
+ * For real-time coefficient changes, use parameter ramps/crossfades or call
+ * biquad_reset() deliberately, understanding that a reset can click. Do not
+ * swap whole filter banks directly in the audio hot loop without an anti-click
+ * strategy.
+ */
 void biquad_set_bandpass(Biquad *s, float fs, float fc, float q);
 void biquad_set_highpass(Biquad *s, float fs, float fc, float q);
+void biquad_set_bandpass_reset(Biquad *s, float fs, float fc, float q);
+void biquad_set_highpass_reset(Biquad *s, float fs, float fc, float q);
 
 void vocoder_init(Vocoder *v, float fs);
 void vocoder_reset(Vocoder *v);

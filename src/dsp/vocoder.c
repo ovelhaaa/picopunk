@@ -18,8 +18,9 @@ static const float k_band_edges[VOCODER_NBANDS + 1] = {
     2261.0f, 2846.0f, 3583.0f, 4511.0f, 5680.0f, 7150.0f, 9000.0f
 };
 
-static float clampf(float x, float lo, float hi)
+static float clampf_default(float x, float lo, float hi, float def)
 {
+    if (!isfinite(x)) x = def;
     if (x < lo) return lo;
     if (x > hi) return hi;
     return x;
@@ -27,8 +28,8 @@ static float clampf(float x, float lo, float hi)
 
 static inline float time_to_coef(float time_s, float fs)
 {
-    time_s = clampf(time_s, 0.0001f, 10.0f);
-    fs = clampf(fs, 1000.0f, 384000.0f);
+    time_s = clampf_default(time_s, 0.0001f, 10.0f, 0.001f);
+    fs = clampf_default(fs, 1000.0f, 384000.0f, (float)VOCODER_FS);
     return expf(-1.0f / (time_s * fs));
 }
 
@@ -46,9 +47,7 @@ static inline float xorshift_noise(uint32_t *state)
     x ^= x >> 17;
     x ^= x << 5;
     *state = x;
-    int32_t signed_x;
-    memcpy(&signed_x, &x, sizeof(signed_x));
-    return (float)signed_x * (1.0f / 2147483648.0f);
+    return ((float)x * (1.0f / 2147483648.0f)) - 1.0f;
 }
 
 static inline float softclip(float x)
@@ -88,9 +87,9 @@ static void biquad_normalize(Biquad *s, float b0, float b1, float b2,
 void biquad_set_bandpass(Biquad *s, float fs, float fc, float q)
 {
     if (s == NULL) return;
-    fs = clampf(fs, 1000.0f, 384000.0f);
-    fc = clampf(fc, 1.0f, 0.45f * fs);
-    q = clampf(q, 0.1f, 20.0f);
+    fs = clampf_default(fs, 1000.0f, 384000.0f, (float)VOCODER_FS);
+    fc = clampf_default(fc, 1.0f, 0.45f * fs, 1000.0f);
+    q = clampf_default(q, 0.1f, 20.0f, 0.707f);
 
     const float w0 = 2.0f * (float)M_PI * fc / fs;
     const float cw = cosf(w0);
@@ -104,9 +103,9 @@ void biquad_set_bandpass(Biquad *s, float fs, float fc, float q)
 void biquad_set_highpass(Biquad *s, float fs, float fc, float q)
 {
     if (s == NULL) return;
-    fs = clampf(fs, 1000.0f, 384000.0f);
-    fc = clampf(fc, 1.0f, 0.45f * fs);
-    q = clampf(q, 0.1f, 20.0f);
+    fs = clampf_default(fs, 1000.0f, 384000.0f, (float)VOCODER_FS);
+    fc = clampf_default(fc, 1.0f, 0.45f * fs, 1000.0f);
+    q = clampf_default(q, 0.1f, 20.0f, 0.707f);
 
     const float w0 = 2.0f * (float)M_PI * fc / fs;
     const float cw = cosf(w0);
@@ -127,14 +126,26 @@ static float band_q(unsigned k)
     return 4.0f - 1.0f * ((float)(k - 16u) / 3.0f);
 }
 
+void biquad_set_bandpass_reset(Biquad *s, float fs, float fc, float q)
+{
+    biquad_set_bandpass(s, fs, fc, q);
+    biquad_reset(s);
+}
+
+void biquad_set_highpass_reset(Biquad *s, float fs, float fc, float q)
+{
+    biquad_set_highpass(s, fs, fc, q);
+    biquad_reset(s);
+}
+
 void vocoder_set_attack_release(Vocoder *v, float attack_ms,
                                 float release_low_ms,
                                 float release_high_ms)
 {
     if (v == NULL) return;
-    attack_ms = clampf(attack_ms, 0.5f, 50.0f);
-    release_low_ms = clampf(release_low_ms, 10.0f, 500.0f);
-    release_high_ms = clampf(release_high_ms, 10.0f, 500.0f);
+    attack_ms = clampf_default(attack_ms, 0.5f, 50.0f, 3.0f);
+    release_low_ms = clampf_default(release_low_ms, 10.0f, 500.0f, 120.0f);
+    release_high_ms = clampf_default(release_high_ms, 10.0f, 500.0f, 50.0f);
     for (unsigned k = 0; k < VOCODER_NBANDS; ++k) {
         const float t = (float)k / (float)(VOCODER_NBANDS - 1u);
         const float rel_ms = release_low_ms + (release_high_ms - release_low_ms) * t;
@@ -147,8 +158,7 @@ void vocoder_init(Vocoder *v, float fs)
 {
     if (v == NULL) return;
     memset(v, 0, sizeof(*v));
-    if (fs <= 0.0f) fs = (float)VOCODER_FS;
-    v->fs = clampf(fs, 1000.0f, 384000.0f);
+    v->fs = clampf_default(fs, 1000.0f, 384000.0f, (float)VOCODER_FS);
     v->preemph = 0.70f;
     v->output_gain = 0.8f;
     v->wet = 1.0f;
@@ -199,23 +209,23 @@ void vocoder_reset(Vocoder *v)
 void vocoder_set_wet_dry(Vocoder *v, float wet, float dry)
 {
     if (v == NULL) return;
-    v->wet = clampf(wet, 0.0f, 1.0f);
-    v->dry = clampf(dry, 0.0f, 1.0f);
+    v->wet = clampf_default(wet, 0.0f, 1.0f, 1.0f);
+    v->dry = clampf_default(dry, 0.0f, 1.0f, 0.0f);
 }
 
 void vocoder_set_output_gain(Vocoder *v, float gain)
 {
-    if (v != NULL) v->output_gain = clampf(gain, 0.0f, 4.0f);
+    if (v != NULL) v->output_gain = clampf_default(gain, 0.0f, 4.0f, 0.8f);
 }
 
 void vocoder_set_sibilance(Vocoder *v, float amount)
 {
-    if (v != NULL) v->sibilance_amount = clampf(amount, 0.0f, 1.0f);
+    if (v != NULL) v->sibilance_amount = clampf_default(amount, 0.0f, 1.0f, 1.0f);
 }
 
 void vocoder_set_preemphasis(Vocoder *v, float amount)
 {
-    if (v != NULL) v->preemph = clampf(amount, 0.0f, 0.95f);
+    if (v != NULL) v->preemph = clampf_default(amount, 0.0f, 0.95f, 0.70f);
 }
 
 void vocoder_process_block(Vocoder *v, const float *voice_in,
@@ -245,7 +255,7 @@ void vocoder_process_block(Vocoder *v, const float *voice_in,
         }
 
         float sib_target = ((env_hi / (env_sum + 1.0e-6f)) - 0.25f) * 3.0f;
-        sib_target = clampf(sib_target, 0.0f, 1.0f) * v->sibilance_amount;
+        sib_target = clampf_default(sib_target, 0.0f, 1.0f, 0.0f) * v->sibilance_amount;
         v->sibilance = v->sibilance_coef * v->sibilance +
                        (1.0f - v->sibilance_coef) * sib_target;
 
