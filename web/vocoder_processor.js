@@ -67,12 +67,24 @@ class VocoderProcessor extends AudioWorkletProcessor {
 
     async _initWasm(wasmBinary) {
         try {
-            // VocoderModule is the Emscripten factory loaded in the global scope
-            // via importScripts (done before addModule).
-            const moduleArgs = {};
-            if (wasmBinary) {
-                moduleArgs.wasmBinary = wasmBinary;
-            }
+            // AudioWorkletGlobalScope does NOT have fetch(), so Emscripten's
+            // default WASM loading (streaming compile via fetch) will fail.
+            // We bypass it entirely by providing instantiateWasm, which
+            // manually calls WebAssembly.instantiate with the binary that
+            // the main thread already fetched and transferred to us.
+            const moduleArgs = {
+                instantiateWasm: (imports, successCallback) => {
+                    WebAssembly.instantiate(wasmBinary, imports)
+                        .then(result => {
+                            successCallback(result.instance, result.module);
+                        })
+                        .catch(err => {
+                            console.error('[VocoderProcessor] WASM instantiate failed:', err);
+                        });
+                    return {};
+                }
+            };
+
             const mod = await VocoderModule(moduleArgs);
             this._wasm = mod;
 
