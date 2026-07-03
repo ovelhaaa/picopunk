@@ -76,6 +76,7 @@ class VocoderProcessor extends AudioWorkletProcessor {
                 instantiateWasm: (imports, successCallback) => {
                     WebAssembly.instantiate(wasmBinary, imports)
                         .then(result => {
+                            this._wasmInstance = result.instance; // Capture instance!
                             successCallback(result.instance, result.module);
                         })
                         .catch(err => {
@@ -87,6 +88,13 @@ class VocoderProcessor extends AudioWorkletProcessor {
 
             const mod = await VocoderModule(moduleArgs);
             this._wasm = mod;
+
+            // Find the WebAssembly.Memory export dynamically (Emscripten minifies its name)
+            const wasmExports = this._wasmInstance.exports;
+            this._memory = Object.values(wasmExports).find(e => e instanceof WebAssembly.Memory);
+            
+            // Create initial heap view
+            this._HEAPF32 = new Float32Array(this._memory.buffer);
 
             // Create vocoder instance
             const fs = sampleRate || SAMPLE_RATE;
@@ -166,33 +174,34 @@ class VocoderProcessor extends AudioWorkletProcessor {
     }
 
     process(inputs, outputs, _parameters) {
-        if (!this._ready || !this._wasm) {
+        if (!this._ready || !this._wasm || !this._HEAPF32) {
             return true; // keep alive while loading
         }
 
         const mod = this._wasm;
         const nframes = RENDER_QUANTUM;
 
+        // Refresh heap view in case memory was grown
+        if (this._HEAPF32.buffer !== this._memory.buffer) {
+            this._HEAPF32 = new Float32Array(this._memory.buffer);
+        }
+
         // ── Voice input (input 0, channel 0) ────────────────────────
         const voiceInput = inputs[0];
         const voiceData = (voiceInput && voiceInput[0]) ? voiceInput[0] : null;
 
-        const voiceHeap = new Float32Array(
-            mod.HEAPF32.buffer, this._voiceBuf, nframes
-        );
+        const voiceIdx = this._voiceBuf >> 2;
         if (voiceData && voiceData.length >= nframes) {
-            voiceHeap.set(voiceData);
+            this._HEAPF32.set(voiceData, voiceIdx);
         } else {
-            voiceHeap.fill(0);
+            this._HEAPF32.fill(0, voiceIdx, voiceIdx + nframes);
         }
 
         // ── Carrier (generated internally) ──────────────────────────
-        const carrierHeap = new Float32Array(
-            mod.HEAPF32.buffer, this._carrierBuf, nframes
-        );
+        const carrierIdx = this._carrierBuf >> 2;
         const tempCarrier = new Float32Array(nframes);
         this._generateCarrier(tempCarrier, nframes);
-        carrierHeap.set(tempCarrier);
+        this._HEAPF32.set(tempCarrier, carrierIdx);
 
         // ── Process ─────────────────────────────────────────────────
         mod._wasm_vocoder_process(
@@ -204,14 +213,14 @@ class VocoderProcessor extends AudioWorkletProcessor {
         );
 
         // ── Copy output ─────────────────────────────────────────────
-        const outHeap = new Float32Array(
-            mod.HEAPF32.buffer, this._outBuf, nframes
-        );
+        const outIdx = this._outBuf >> 2;
+        const outSlice = this._HEAPF32.subarray(outIdx, outIdx + nframes);
+        
         const output = outputs[0];
         if (output && output[0]) {
-            output[0].set(outHeap);
+            output[0].set(outSlice);
             // Copy to second channel if stereo
-            if (output[1]) output[1].set(outHeap);
+            if (output[1]) output[1].set(outSlice);
         }
 
         // ── Send envelopes to UI thread periodically ────────────────
